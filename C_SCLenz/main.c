@@ -1,81 +1,84 @@
 #include <X11/Xlib.h>
+#include <fcntl.h>
+#include <linux/ioctl.h>
+#include <linux/uinput.h>
 #include <stdio.h>
 #include <stdlib.h>
- 
-#define SHIFT 0b0001
-#define CAPS 0b0010
-#define CTRL 0b0100
-#define ALT 0b1000
+#include <sys/inotify.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
+const char char_to_key[248];
 
-int main()
-{
+void emit(int fd, int type, int code, int val) {
+  struct input_event ie;
 
-// int thing = 2;
-// int *pthing = &thing;
+  ie.type = type;
+  ie.code = code;
+  ie.value = val;
+  /* timestamp values below are ignored */
+  ie.time.tv_sec = 0;
+  ie.time.tv_usec = 0;
 
-//   printf("%d", *pthing);
-    Display *display;
-    Window window;
-    XEvent event;
-    int s;
-
-    unsigned modifiers = 0b0000;
-    //LSB to MSB
-    //shift -> caps lock -> ctrl -> alt 
-
-
-    /* open connection with the server */
-    display = XOpenDisplay(NULL);
-    if (display == NULL)
-    {
-        fprintf(stderr, "Cannot open display\n");
-        exit(1);
-    }
- 
-    s = DefaultScreen(display);
- 
-    /* create window */
-    window = XCreateSimpleWindow(display, RootWindow(display, s), 10, 10, 200, 200, 1,
-                           BlackPixel(display, s), WhitePixel(display, s));
- 
-    /* select kind of events we are interested in */
-    XSelectInput(display, window, KeyPressMask | KeyReleaseMask );
- 
-    /* map (show) the window */
-    XMapWindow(display, window);
- 
-    /* event loop */
-    while (1)
-    {
-        XNextEvent(display, &event);
- 
-        /* keyboard events */
-        if (event.type == KeyPress)
-        {
-
-if ( modifiers & SHIFT || modifiers & CAPS){
-  printf( "KeyPress: %c\n",  XLookupKeysym(&event.xkey, 2));
+  write(fd, &ie, sizeof(ie));
 }
 
-            printf( "KeyPress: %c\n",  XLookupKeysym(&event.xkey, 1));
+int init(int fd, struct uinput_setup *usetup) {
 
-           
-            /* exit on ESC key press */
-            if ( event.xkey.keycode == 0x09 )
-                break;
-        }
-        else if (event.type == KeyRelease)
-        {
-            printf( "KeyRelease: %c\n", XLookupKeysym(&event.xkey, 1) );
-  if ( modifiers & SHIFT || modifiers & CAPS){
-printf( "KeyRelease: %c\n", XLookupKeysym(&event.xkey, 2) );
+  ioctl(fd, UI_SET_EVBIT, EV_KEY);
+
+  for (int i = 1; i <= 248; i++) {
+    ioctl(fd, UI_SET_KEYBIT, i);
+  }
+
+  memset(usetup, 0, sizeof(usetup));
+  usetup->id.bustype = BUS_USB;
+  usetup->id.vendor = 0x1234;  /* sample vendor */
+  usetup->id.product = 0x5678; /* sample product */
+  strcpy(usetup->name, "vkb_sclenz, virtual input device");
+
+  ioctl(fd, UI_DEV_SETUP, usetup);
+  ioctl(fd, UI_DEV_CREATE);
+  return 0;
 }
-        }
+
+void sendkey(int fd, int key) {
+  emit(fd, EV_KEY, key, 1);
+  emit(fd, EV_SYN, SYN_REPORT, 0);
+  emit(fd, EV_KEY, key, 0);
+  emit(fd, EV_SYN, SYN_REPORT, 0);
+}
+
+int main(void) {
+
+  int ifinst = inotify_init();
+  inotify_add_watch(ifinst, "/home/lenz/Documents/asdf.txt", IN_ACCESS);
+
+  for (;;) {
+    struct inotify_event ev;
+    int i;
+    if (i = read(ifinst, &ev, sizeof(ev))) {
+      fprintf(stderr, "An error occured when opening the file: %d", i);
     }
 
-    /* close connection to server */
-    XCloseDisplay(display);
- 
-    return 0;
+    printf("the file had been opened");
+  }
+
+  struct uinput_setup usetup;
+
+  int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+
+  init(fd, &usetup);
+
+  sleep(1);
+
+  sendkey(fd, KEY_B);
+
+  sleep(1);
+
+  ioctl(fd, UI_DEV_DESTROY);
+
+  close(fd);
+  close(ifinst);
+  return 0;
 }
